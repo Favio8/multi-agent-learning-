@@ -1,0 +1,117 @@
+# Multi-Agent Learning System Configuration
+
+# System settings
+system:
+  project_name: "智能学习卡片生成系统"
+  version: "0.1.0"
+  language: "zh"  # zh or en
+  log_level: "INFO"
+
+# Database settings
+database:
+  type: "sqlite"  # sqlite or neo4j
+  sqlite_path: "data/mas.db"
+  neo4j:
+    uri: "bolt://localhost:7687"
+    user: "neo4j"
+    password: "password"
+
+# Vector store settings
+vector_store:
+  type: "faiss"  # faiss or chromadb
+  dimension: 384  # For all-MiniLM-L6-v2
+  index_path: "data/vector_index"
+
+# Model settings
+models:
+  embedding:
+    model_name: "sentence-transformers/all-MiniLM-L6-v2"
+    device: "cpu"  # cpu or cuda
+  
+  llm:
+    enabled: true  # 启用LLM
+    provider: "deepseek"  # 使用DeepSeek
+    model_name: "deepseek-chat"  # DeepSeek模型
+    api_key: ""  # DeepSeek API密钥
+    base_url: "https://api.deepseek.com"  # DeepSeek API地址
+    temperature: 0.7
+    max_tokens: 2000
+
+  spacy:
+    model: "zh_core_web_sm"  # or en_core_web_sm
+
+# Agent configurations
+agents:
+  content:
+    min_section_length: 150
+    max_section_length: 300
+    split_by_heading: true
+  
+  concept:
+    similarity_threshold: 0.85
+    min_concept_length: 2
+    max_concept_length: 20
+    enable_ner: true
+    use_llm: true  # 启用LLM提取概念
+  
+  quiz:
+    cards_per_concept: 2
+    min_distractor_similarity: 0.3
+    enable_consistency_check: true
+    use_llm: true  # 启用LLM生成卡片
+    card_types:
+      - knowledge  # 知识记忆卡片
+      - cloze      # 填空题
+      - mcq        # 选择题
+      - short      # 简答题
+  
+  eval:
+    semantic_threshold: 0.7
+    enable_semantic_matching: true
+    error_classification: true
+  
+  schedule:
+    algorithm: "sm2"  # SM-2 algorithm
+    default_ef: 2.5
+    min_ef: 1.3
+    max_interval_days: 365
+
+# Orchestrator settings
+orchestrator:
+  enable_kg: true
+  enable_consistency_check: true
+  max_retries: 3
+  timeout_seconds: 300
+
+# API settings
+api:
+  host: "0.0.0.0"
+  port: 8000
+  reload: true
+  cors_origins:
+    - "http://localhost:3000"
+    - "http://localhost:8501"
+
+# UI settings
+ui:
+  theme: "light"
+  page_size: 20
+  enable_visualization: true
+
+# Evaluation settings
+evaluation:
+  enable_ab_test: false
+  baseline_mode: "single_agent"  # single_agent or multi_agent
+  metrics:
+    - card_quality
+    - learning_efficiency
+    - system_performance
+
+# Storage paths
+paths:
+  data_dir: "data"
+  logs_dir: "logs"
+  uploads_dir: "data/uploads"
+  exports_dir: "data/exports"
+  audit_logs: "logs/audit"
+
