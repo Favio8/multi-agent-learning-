@@ -2,14 +2,18 @@
 Configuration management module
 """
 
-import yaml
 import os
 from pathlib import Path
 from typing import Dict, Any, Optional
+
+import yaml
 from dotenv import load_dotenv
 
-# Load environment variables
-load_dotenv()
+# Load environment variables from the project root so they work no matter
+# whether the app is started via `python api/app.py` or `uvicorn api.app:app`.
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+load_dotenv(PROJECT_ROOT / ".env")
+load_dotenv(PROJECT_ROOT / ".env.local", override=True)
 
 
 class Config:

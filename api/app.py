@@ -3,15 +3,16 @@ FastAPI Application
 Main entry point for the backend API
 """
 
+from copy import deepcopy
 from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
-from typing import List, Optional
+from pydantic import BaseModel, Field
+from typing import List, Optional, Literal
 import logging
 from pathlib import Path
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # Import project modules
 import sys
@@ -29,6 +30,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger("api.app")
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -45,6 +47,10 @@ config.ensure_directories()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=config.get("api.cors_origins", ["*"]),
+    allow_origin_regex=config.get(
+        "api.cors_origin_regex",
+        r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
+    ),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -58,26 +64,7 @@ except Exception as e:
     logger.error(f"Failed to initialize database: {e}")
     raise
 
-try:
-    # Prepare orchestrator config with all agent configs
-    orchestrator_config = {
-        "content": config.get("agents.content", {}),
-        "concept": config.get("agents.concept", {}),
-        "quiz": config.get("agents.quiz", {}),
-        "eval": config.get("agents.eval", {}),
-        "schedule": config.get("agents.schedule", {}),
-        "enable_kg": config.get("orchestrator.enable_kg", True),
-        "enable_consistency_check": config.get("orchestrator.enable_consistency_check", True),
-        "max_retries": config.get("orchestrator.max_retries", 3)
-    }
-    
-    orchestrator = Orchestrator(orchestrator_config)
-    logger.info("Orchestrator initialized successfully")
-except Exception as e:
-    logger.error(f"Failed to initialize orchestrator: {e}")
-    import traceback
-    traceback.print_exc()
-    raise
+orchestrator = None
 
 try:
     parser = DocumentParser()
@@ -106,6 +93,12 @@ class BuildRequest(BaseModel):
     """Request model for pipeline build"""
     enable_kg: bool = True
     enable_consistency_check: bool = True
+    target_card_count: int = Field(default=12, ge=4, le=60)
+    build_strategy: Literal["balanced", "memory", "challenge"] = "balanced"
+    card_types: List[Literal["knowledge", "cloze", "mcq", "short"]] = Field(
+        default_factory=lambda: ["knowledge", "cloze", "mcq", "short"]
+    )
+    difficulty: Literal["mixed", "L", "M", "H"] = "mixed"
 
 
 class BuildResponse(BaseModel):
@@ -137,6 +130,61 @@ class ReviewPlanResponse(BaseModel):
     due_today: int
     overdue: int
     cards: List[dict]
+
+
+def create_orchestrator_config(build_request: Optional[BuildRequest] = None) -> dict:
+    """Create orchestrator config, optionally overriding quiz/build settings."""
+    request = build_request or BuildRequest()
+    orchestrator_config = {
+        "content": deepcopy(config.get("agents.content", {})),
+        "concept": deepcopy(config.get("agents.concept", {})),
+        "quiz": deepcopy(config.get("agents.quiz", {})),
+        "eval": deepcopy(config.get("agents.eval", {})),
+        "schedule": deepcopy(config.get("agents.schedule", {})),
+        "enable_kg": request.enable_kg,
+        "enable_consistency_check": request.enable_consistency_check,
+        "max_retries": config.get("orchestrator.max_retries", 3),
+    }
+
+    quiz_config = orchestrator_config["quiz"]
+    requested_types = request.card_types or ["knowledge", "cloze", "mcq", "short"]
+    quiz_config["card_types"] = requested_types
+    quiz_config["target_card_count"] = request.target_card_count
+    quiz_config["build_strategy"] = request.build_strategy
+    quiz_config["difficulty_mode"] = request.difficulty
+
+    if request.target_card_count <= 10:
+        quiz_config["cards_per_concept"] = 1
+    elif request.target_card_count <= 24:
+        quiz_config["cards_per_concept"] = 2
+    else:
+        quiz_config["cards_per_concept"] = 3
+
+    return orchestrator_config
+
+
+def build_card_summary(cards_data: List[dict], build_request: BuildRequest) -> dict:
+    """Build a frontend-friendly card summary payload."""
+    by_difficulty = {"L": 0, "M": 0, "H": 0}
+    for card in cards_data:
+        difficulty = card.get("difficulty")
+        if difficulty in by_difficulty:
+            by_difficulty[difficulty] += 1
+
+    return {
+        "by_difficulty": by_difficulty,
+        "build_options": build_request.model_dump(),
+    }
+
+
+try:
+    orchestrator = Orchestrator(create_orchestrator_config())
+    logger.info("Orchestrator initialized successfully")
+except Exception as e:
+    logger.error(f"Failed to initialize orchestrator: {e}")
+    import traceback
+    traceback.print_exc()
+    raise
 
 
 # API Endpoints
@@ -215,14 +263,9 @@ async def ingest_document(
             title = file.filename
             source = str(file_path)
             
-            # Detect source type from file extension
-            ext = file.filename.lower().split('.')[-1]
-            if ext == 'pdf':
-                source_type = 'pdf'
-            elif ext in ['html', 'htm']:
-                source_type = 'html'
-            else:
-                source_type = 'text'
+            # Detect source type from the saved file path so backend parsing
+            # and upload ingestion always use the same extension mapping.
+            source_type = parser.detect_type(file_path)
             
             logger.info(f"File uploaded: {file_path}, type: {source_type}")
             
@@ -266,7 +309,11 @@ async def ingest_document(
 
 
 @app.post("/build/{doc_id}", response_model=BuildResponse)
-async def build_pipeline(doc_id: str, background_tasks: BackgroundTasks):
+async def build_pipeline(
+    doc_id: str,
+    request: Optional[BuildRequest] = None,
+    background_tasks: BackgroundTasks = None,
+):
     """
     Trigger the full pipeline for a document
     Content -> Concept -> Quiz generation
@@ -277,7 +324,16 @@ async def build_pipeline(doc_id: str, background_tasks: BackgroundTasks):
         if not doc:
             raise HTTPException(status_code=404, detail="Document not found")
         
-        logger.info(f"Starting pipeline for doc_id={doc_id}, source={doc.source}, type={doc.source_type}")
+        build_request = request or BuildRequest()
+        if not build_request.card_types:
+            raise HTTPException(status_code=400, detail="At least one card type must be selected")
+        logger.info(
+            "Starting pipeline for doc_id=%s, source=%s, type=%s, options=%s",
+            doc_id,
+            doc.source,
+            doc.source_type,
+            build_request.model_dump(),
+        )
         
         # Check if source file exists
         from pathlib import Path
@@ -312,12 +368,14 @@ async def build_pipeline(doc_id: str, background_tasks: BackgroundTasks):
             "doc_id": doc_id,
             "content": parsed["text"],
             "source": doc.source_type,
-            "language": doc.lang
+            "language": doc.lang,
+            "build_options": build_request.model_dump(),
         }
         
         # Run pipeline
         try:
-            result = orchestrator.run_full_pipeline(pipeline_input)
+            build_orchestrator = Orchestrator(create_orchestrator_config(build_request))
+            result = build_orchestrator.run_full_pipeline(pipeline_input)
             logger.info(f"Pipeline execution completed with status: {result.get('status')}")
         except Exception as e:
             logger.error(f"Pipeline execution failed: {e}")
@@ -330,27 +388,28 @@ async def build_pipeline(doc_id: str, background_tasks: BackgroundTasks):
         
         # Save results to database
         try:
-            # Save sections
             sections_data = result["stages"]["content"]["sections"]
             sections = [Section(**s) for s in sections_data]
-            if sections:
-                db.insert_sections(sections)
-                logger.info(f"Saved {len(sections)} sections")
             
-            # Save concepts (if enabled)
+            concepts = []
             if "concepts" in result["stages"] and not result["stages"]["concepts"].get("skipped"):
                 concepts_data = result["stages"]["concepts"]["concepts"]
                 concepts = [Concept(**c) for c in concepts_data]
-                if concepts:
-                    db.insert_concepts(concepts)
-                    logger.info(f"Saved {len(concepts)} concepts")
             
-            # Save cards
             cards_data = result["stages"]["quiz"]["cards"]
             cards = [Card(**c) for c in cards_data]
-            if cards:
-                db.insert_cards(cards)
-                logger.info(f"Saved {len(cards)} cards")
+
+            if not db.replace_generated_content(doc_id, sections, concepts, cards):
+                raise HTTPException(status_code=500, detail="Failed to replace generated content")
+
+            db.sync_learning_progress_totals(doc_id, len(cards))
+            logger.info(
+                "Saved generated content for doc_id=%s (%s sections, %s concepts, %s cards)",
+                doc_id,
+                len(sections),
+                len(concepts),
+                len(cards),
+            )
         except Exception as e:
             logger.error(f"Failed to save results to database: {e}")
             import traceback
@@ -358,11 +417,16 @@ async def build_pipeline(doc_id: str, background_tasks: BackgroundTasks):
             raise HTTPException(status_code=500, detail=f"Database save failed: {str(e)}")
         
         logger.info(f"Pipeline completed successfully for doc_id={doc_id}")
+        summary = {
+            **result["summary"],
+            "by_type": result["stages"]["quiz"].get("metadata", {}).get("by_type", {}),
+            **build_card_summary(cards_data, build_request),
+        }
         
         return BuildResponse(
             doc_id=doc_id,
             status="success",
-            summary=result["summary"],
+            summary=summary,
             message="Pipeline completed successfully"
         )
         
@@ -383,9 +447,10 @@ async def get_cards(doc_id: Optional[str] = None, limit: int = 20, offset: int =
     """
     try:
         cards = db.get_cards(doc_id=doc_id, limit=limit, offset=offset)
+        total = db.count_cards(doc_id=doc_id)
         
         return {
-            "total": len(cards),
+            "total": total,
             "cards": [card.dict() for card in cards]
         }
         
@@ -472,8 +537,8 @@ async def get_review_plan(user_id: str):
     Returns cards that are due for review
     """
     try:
-        # Get due card IDs
-        due_card_ids = db.get_due_cards(user_id)
+        due_records = db.get_due_review_records(user_id)
+        due_card_ids = [record["card_id"] for record in due_records]
         
         # Get full card data
         cards = []
@@ -482,9 +547,12 @@ async def get_review_plan(user_id: str):
             if card:
                 cards.append(card.dict())
         
-        # Count overdue (cards due more than 1 day ago)
-        # TODO: Implement proper overdue counting
-        overdue = 0
+        overdue_cutoff = datetime.now() - timedelta(days=1)
+        overdue = sum(
+            1
+            for record in due_records
+            if datetime.fromisoformat(record["next_due"]) < overdue_cutoff
+        )
         
         return ReviewPlanResponse(
             user_id=user_id,
@@ -548,8 +616,7 @@ async def get_report(user_id: str):
 async def list_documents():
     """List all documents"""
     try:
-        # TODO: Implement document listing
-        return {"message": "Document listing not yet implemented"}
+        return db.list_documents()
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -617,13 +684,26 @@ if __name__ == "__main__":
     
     host = config.get("api.host", "0.0.0.0")
     port = config.get("api.port", 8000)
+    reload_enabled = config.get("api.reload", True)
+    reload_dirs = [
+        str((PROJECT_ROOT / folder).resolve())
+        for folder in ["api", "agents", "configs", "nlp", "storage"]
+        if (PROJECT_ROOT / folder).exists()
+    ]
+    reload_excludes = [
+        str((PROJECT_ROOT / folder).resolve())
+        for folder in ["data", "logs", "frontend/node_modules", "frontend/dist"]
+        if (PROJECT_ROOT / folder).exists()
+    ]
     
     logger.info(f"Starting API server on {host}:{port}")
     
     uvicorn.run(
-        "app:app",
+        "api.app:app",
         host=host,
         port=port,
-        reload=config.get("api.reload", True)
+        reload=reload_enabled,
+        reload_dirs=reload_dirs if reload_enabled else None,
+        reload_excludes=reload_excludes if reload_enabled else None,
     )
 

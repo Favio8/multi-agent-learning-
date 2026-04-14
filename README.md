@@ -84,9 +84,9 @@ Agent   Agent    Agent   Agent   Agent
 - DeepSeek AI - LLM支持
 
 **前端**:
-- Streamlit - 快速UI开发
-- Plotly - 数据可视化
-- Inter字体 - 现代化设计
+- React + Vite - 现代前端工作台
+- Tailwind CSS + shadcn/ui - 极简设计系统
+- Recharts - 数据可视化
 
 **核心算法**:
 - SM-2间隔重复算法
@@ -98,8 +98,8 @@ Agent   Agent    Agent   Agent   Agent
 
 ```
 ┌─────────────────────────────────────────┐
-│           Streamlit Frontend            │
-│      (玻璃拟态UI + 流光动画)              │
+│         React + Vite Frontend           │
+│   (Apple-like 极简工作台 + shadcn/ui)    │
 └──────────────────┬──────────────────────┘
                    │ REST API
 ┌──────────────────▼──────────────────────┐
@@ -175,13 +175,15 @@ pip install -r requirements.txt
 # 终端1 - 启动后端API
 python api/app.py
 
-# 终端2 - 启动前端UI
-streamlit run ui/app.py
+# 终端2 - 启动前端工作台
+cd frontend
+npm install
+npm run dev
 ```
 
 6. **访问应用**
 ```
-http://localhost:8501
+http://localhost:5173
 ```
 
 ### 一键启动（可选）
@@ -337,7 +339,10 @@ ai-learning-companion/
 │   └── orchestrator.py    # 协调器
 ├── api/                   # FastAPI后端
 │   └── app.py
-├── ui/                    # Streamlit前端
+├── frontend/              # React + Vite 前端
+│   ├── src/
+│   └── package.json
+├── ui/                    # 旧版 Streamlit 前端（legacy）
 │   └── app.py
 ├── storage/               # 数据存储
 │   ├── db.py             # 数据库操作
@@ -432,7 +437,9 @@ ai-learning-companion/
 
 ### 技术支持
 - [DeepSeek AI](https://www.deepseek.com/) - LLM支持
-- [Streamlit](https://streamlit.io/) - 前端框架
+- [React](https://react.dev/) - 前端框架
+- [Vite](https://vite.dev/) - 前端构建工具
+- [shadcn/ui](https://ui.shadcn.com/) - 组件体系
 - [FastAPI](https://fastapi.tiangolo.com/) - 后端框架
 
 ### 设计灵感

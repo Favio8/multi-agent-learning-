@@ -12,7 +12,7 @@ class Document(BaseModel):
     doc_id: str
     title: str
     source: str
-    source_type: str = "text"  # pdf, html, text
+    source_type: str = "text"  # pdf, html, text, docx, pptx, xlsx, xls, markdown, csv, json, xml
     lang: str = "zh"
     created_at: Optional[str] = None
     updated_at: Optional[str] = None

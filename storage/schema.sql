@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS docs (
     doc_id TEXT PRIMARY KEY,
     title TEXT,
     source TEXT,
-    source_type TEXT,  -- pdf, html, text
+    source_type TEXT,  -- pdf, html, text, docx, pptx, xlsx, xls, markdown, csv, json, xml
     lang TEXT,
     created_at TEXT,
     updated_at TEXT,

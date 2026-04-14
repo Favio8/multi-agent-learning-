@@ -4,6 +4,7 @@
 # Document parsing
 pymupdf>=1.23.0
 trafilatura>=1.6.0
+markitdown[docx,pptx,xlsx,xls]>=0.1.0
 pytesseract>=0.3.10  # Optional OCR
 
 # NLP and embeddings

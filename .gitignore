@@ -73,3 +73,7 @@ vector_index/
 uploads/
 exports/
 
+# Keep the frontend source tree tracked
+!frontend/src/lib/
+!frontend/src/lib/**
+

@@ -1,63 +1,136 @@
 @echo off
-REM Windows启动脚本 - 多智能体学习系统
+setlocal EnableExtensions EnableDelayedExpansion
 
+for %%I in ("%~dp0.") do set "ROOT_DIR=%%~fI"
+cd /d "%ROOT_DIR%"
+
+set "ENV_NAME=MAS"
+set "DRY_RUN=0"
+
+:parse_args
+if "%~1"=="" goto args_done
+if /I "%~1"=="--dry-run" (
+    set "DRY_RUN=1"
+) else (
+    set "ENV_NAME=%~1"
+)
+shift
+goto parse_args
+
+:args_done
 echo ========================================
-echo   智能学习卡片生成系统
-echo   Multi-Agent Learning System
+echo   Multi-Agent Learning Startup
 echo ========================================
 echo.
+echo [INFO] Project root: %ROOT_DIR%
+echo [INFO] Conda env: %ENV_NAME%
+echo.
 
-REM 检查Python是否安装
-python --version >nul 2>&1
-if %errorlevel% neq 0 (
-    echo [错误] 未检测到Python，请先安装Python 3.10+
+set "CONDA_CMD="
+if defined CONDA_EXE (
+    set "CONDA_CMD=%CONDA_EXE%"
+)
+
+if not defined CONDA_CMD (
+    for /f "delims=" %%I in ('where conda.exe 2^>nul') do (
+        set "CONDA_CMD=%%I"
+        goto conda_found
+    )
+)
+
+if not defined CONDA_CMD (
+    for /f "delims=" %%I in ('where conda 2^>nul') do (
+        set "CONDA_CMD=%%I"
+        goto conda_found
+    )
+)
+
+:conda_found
+if not defined CONDA_CMD (
+    echo [ERROR] Conda was not found. Please open this project from a terminal where Conda is available.
     pause
     exit /b 1
 )
 
-echo [信息] Python已安装
-echo.
-
-REM 检查虚拟环境
-if not exist "venv\" (
-    echo [警告] 虚拟环境不存在，正在创建...
-    python -m venv venv
-    echo [信息] 虚拟环境创建完成
+node --version >nul 2>&1
+if errorlevel 1 (
+    echo [ERROR] Node.js 18+ is required.
+    pause
+    exit /b 1
 )
 
-REM 激活虚拟环境
-echo [信息] 激活虚拟环境...
-call venv\Scripts\activate.bat
+call "%CONDA_CMD%" run -n "%ENV_NAME%" python --version >nul 2>&1
+if errorlevel 1 (
+    echo [ERROR] Conda environment "%ENV_NAME%" is not available.
+    echo         You can run: conda env list
+    pause
+    exit /b 1
+)
 
-REM 检查依赖
-echo [信息] 检查依赖包...
-pip install -r requirements.txt --quiet
+echo [INFO] Verifying backend dependencies...
+call "%CONDA_CMD%" run -n "%ENV_NAME%" python -c "import fastapi, uvicorn, dotenv, requests" >nul 2>&1
+if errorlevel 1 (
+    echo [INFO] Installing Python dependencies into "%ENV_NAME%"...
+    call "%CONDA_CMD%" run -n "%ENV_NAME%" python -m pip install -r requirements.txt
+    if errorlevel 1 (
+        echo [ERROR] Failed to install Python dependencies.
+        pause
+        exit /b 1
+    )
+) else (
+    echo [INFO] Backend dependencies look ready.
+)
 
-REM 创建必要的目录
-if not exist "data\" mkdir data
-if not exist "data\uploads\" mkdir data\uploads
-if not exist "logs\" mkdir logs
+if not exist "frontend\node_modules" (
+    echo [INFO] Installing frontend dependencies...
+    pushd frontend
+    call npm install
+    if errorlevel 1 (
+        popd
+        echo [ERROR] Failed to install frontend dependencies.
+        pause
+        exit /b 1
+    )
+    popd
+) else (
+    echo [INFO] Frontend dependencies look ready.
+)
+
+if not exist "data" mkdir data
+if not exist "data\uploads" mkdir data\uploads
+if not exist "logs" mkdir logs
 
 echo.
-echo [信息] 启动后端API服务...
-start "MAS-API" cmd /k "venv\Scripts\activate.bat && python api/app.py"
+echo [INFO] Backend runner:
+echo        %ROOT_DIR%\start_backend.bat
+echo [INFO] Frontend runner:
+echo        %ROOT_DIR%\start_frontend.bat
 
-REM 等待几秒让API启动
+if "%DRY_RUN%"=="1" (
+    echo.
+    echo [INFO] Dry run finished. No windows were launched.
+    exit /b 0
+)
+
+echo.
+echo [INFO] Starting backend window...
+start "MAS-API" cmd /k call "%ROOT_DIR%\start_backend.bat" "%CONDA_CMD%" "%ENV_NAME%" "%ROOT_DIR%"
+
 timeout /t 3 /nobreak >nul
 
-echo [信息] 启动前端UI界面...
-start "MAS-UI" cmd /k "venv\Scripts\activate.bat && streamlit run ui/app.py"
+echo [INFO] Starting frontend window...
+start "MAS-FRONTEND" cmd /k call "%ROOT_DIR%\start_frontend.bat" "%ROOT_DIR%"
 
 echo.
 echo ========================================
-echo   系统启动完成！
+echo   Startup triggered successfully
 echo ========================================
 echo.
-echo   前端界面: http://localhost:8501
-echo   API文档:  http://localhost:8000/docs
+echo   Backend:  http://127.0.0.1:8000
+echo   API Docs: http://127.0.0.1:8000/docs
+echo   Frontend: check the MAS-FRONTEND window for the final Vite URL
 echo.
-echo   按任意键关闭此窗口...
-echo ========================================
-
-pause >nul
-
+echo   Tip: if you want another Conda env, run:
+echo        start_app.bat YourEnvName
+echo.
+pause
